@@ -1,6 +1,6 @@
 """
-AI-Powered Recommendation Engine using Google Gemini
-Uses Gemini API for intelligent, context-aware recommendations
+Enhanced Recommendation Engine with Real Product Integration
+Combines Gemini AI with real product data for practical recommendations
 """
 import logging
 import json
@@ -13,21 +13,20 @@ from google import genai
 from google.genai import types
 
 from app.models.schemas import ProductRecommendation, UserInteractionEvent
+from app.services.product_service import product_service
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-class RecommendationEngine:
+class EnhancedRecommendationEngine:
     """
-    AI-powered recommendation engine using Google Gemini
-    Leverages LLM for intelligent product recommendations
+    Enhanced recommendation engine with real product integration
     """
     
     def __init__(self):
         self.model_version = settings.MODEL_VERSION
         self.user_interactions: Dict[str, List[Dict]] = defaultdict(list)
-        self.product_metadata: Dict[str, Dict] = {}
         self.lock = asyncio.Lock()
         
         # Initialize Gemini client
@@ -50,8 +49,7 @@ class RecommendationEngine:
         
         if not api_key:
             logger.warning(
-                "Gemini API key not found. Set GEMINI_API_KEY or GOOGLE_API_KEY environment variable. "
-                "Recommendations will use fallback logic."
+                "Gemini API key not found. Recommendations will use fallback logic."
             )
             return
         
@@ -63,31 +61,26 @@ class RecommendationEngine:
             self.client = None
     
     async def process_interaction(self, interaction: UserInteractionEvent):
-        """
-        Process a user interaction event
-        Stores interaction data for AI-powered recommendations
-        """
+        """Process a user interaction event"""
         async with self.lock:
             try:
+                # Fetch real product data
+                product_data = await product_service.get_product_by_id(interaction.product_id)
+                
                 interaction_data = {
                     "product_id": interaction.product_id,
                     "interaction_type": interaction.interaction_type,
                     "timestamp": interaction.timestamp.isoformat(),
                     "weight": self.interaction_weights.get(interaction.interaction_type, 1.0),
+                    "product_data": product_data,
                     "metadata": interaction.metadata
                 }
                 
                 self.user_interactions[interaction.user_id].append(interaction_data)
                 
-                # Update product metadata if provided
-                if interaction.metadata:
-                    if interaction.product_id not in self.product_metadata:
-                        self.product_metadata[interaction.product_id] = {}
-                    self.product_metadata[interaction.product_id].update(interaction.metadata)
-                
                 logger.info(
                     f"Processed interaction: user={interaction.user_id}, "
-                    f"product={interaction.product_id}, type={interaction.interaction_type}"
+                    f"product={interaction.product_id} ({product_data.get('title', 'Unknown') if product_data else 'Unknown'})"
                 )
                 
             except Exception as e:
@@ -101,58 +94,66 @@ class RecommendationEngine:
         exclude_products: Optional[List[str]] = None
     ) -> List[ProductRecommendation]:
         """
-        Generate AI-powered recommendations using Gemini
-        Falls back to popularity-based if Gemini is unavailable
+        Generate enhanced recommendations with real product data
         """
         exclude_products = exclude_products or []
         
         try:
-            # Check if user has interaction history
             user_history = self.user_interactions.get(user_id, [])
             
-            if len(user_history) < settings.MIN_INTERACTIONS_FOR_RECOMMENDATIONS:
-                logger.info(f"User {user_id} has insufficient history, using popular products")
-                return await self._get_popular_recommendations(limit, exclude_products)
+            # Get product-based recommendations
+            similar_products = await product_service.search_and_recommend(
+                user_history,
+                limit=limit * 2  # Get more for filtering
+            )
             
-            # Try Gemini-powered recommendations
-            if self.client:
+            # Filter out excluded and already interacted products
+            interacted_ids = set(i["product_id"] for i in user_history)
+            available_products = [
+                p for p in similar_products
+                if str(p.get("id")) not in interacted_ids
+                and str(p.get("id")) not in exclude_products
+            ]
+            
+            # If user has enough history and Gemini is available, use AI
+            if len(user_history) >= settings.MIN_INTERACTIONS_FOR_RECOMMENDATIONS and self.client:
                 try:
                     recommendations = await self._get_gemini_recommendations(
-                        user_id, user_history, limit, exclude_products
+                        user_history, available_products, limit
                     )
                     if recommendations:
                         return recommendations
                 except Exception as e:
-                    logger.warning(f"Gemini recommendation failed, using fallback: {str(e)}")
+                    logger.warning(f"Gemini failed, using product-based: {str(e)}")
             
-            # Fallback to rule-based recommendations
-            return await self._get_fallback_recommendations(
-                user_id, user_history, limit, exclude_products
+            # Fallback: Use product-based recommendations
+            return await self._create_recommendations_from_products(
+                available_products[:limit],
+                "Similar to your interests"
             )
             
         except Exception as e:
             logger.error(f"Error generating recommendations: {str(e)}")
-            return await self._get_popular_recommendations(limit, exclude_products)
+            # Return random products as last resort
+            random_products = await product_service.get_random_products(limit)
+            return await self._create_recommendations_from_products(
+                random_products,
+                "Popular products"
+            )
     
     async def _get_gemini_recommendations(
         self,
-        user_id: str,
         user_history: List[Dict],
-        limit: int,
-        exclude_products: List[str]
+        available_products: List[Dict],
+        limit: int
     ) -> List[ProductRecommendation]:
-        """
-        Use Gemini AI to generate intelligent recommendations
-        """
+        """Use Gemini AI to rank and explain recommendations"""
         try:
-            # Prepare user profile for Gemini
+            # Create user profile
             user_profile = self._create_user_profile(user_history)
-            all_products = list(self.product_metadata.keys())
             
-            # Create prompt for Gemini
-            prompt = self._create_recommendation_prompt(
-                user_profile, all_products, exclude_products, limit
-            )
+            # Create prompt with real product data
+            prompt = self._create_enhanced_prompt(user_profile, available_products, limit)
             
             # Call Gemini API
             response = await asyncio.to_thread(
@@ -165,83 +166,106 @@ class RecommendationEngine:
                 )
             )
             
-            # Parse Gemini response
-            recommendations = self._parse_gemini_response(response.text, limit)
-            
-            logger.info(f"Generated {len(recommendations)} Gemini recommendations for {user_id}")
-            return recommendations
+            # Parse and enrich recommendations
+            return await self._parse_and_enrich_response(response.text, available_products)
             
         except Exception as e:
             logger.error(f"Gemini API error: {str(e)}")
             raise
     
     def _create_user_profile(self, user_history: List[Dict]) -> Dict:
-        """Create a user profile summary from interaction history"""
-        product_scores = defaultdict(float)
-        interaction_counts = defaultdict(int)
+        """Create user profile from history"""
+        categories = defaultdict(int)
+        brands = defaultdict(int)
+        price_range = []
         
         for interaction in user_history:
-            product_id = interaction["product_id"]
-            weight = interaction["weight"]
-            interaction_type = interaction["interaction_type"]
-            
-            product_scores[product_id] += weight
-            interaction_counts[interaction_type] += 1
+            product_data = interaction.get("product_data")
+            if product_data:
+                categories[product_data.get("category", "unknown")] += 1
+                brands[product_data.get("brand", "unknown")] += 1
+                price_range.append(product_data.get("price", 0))
         
-        # Get top interacted products
-        top_products = sorted(
-            product_scores.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )[:5]
+        top_products = [
+            {
+                "title": i.get("product_data", {}).get("title", "Unknown"),
+                "category": i.get("product_data", {}).get("category", "unknown"),
+                "type": i.get("interaction_type")
+            }
+            for i in user_history[-5:]
+            if i.get("product_data")
+        ]
         
         return {
-            "top_products": [p[0] for p in top_products],
-            "interaction_summary": dict(interaction_counts),
+            "top_categories": dict(sorted(categories.items(), key=lambda x: x[1], reverse=True)[:3]),
+            "favorite_brands": dict(sorted(brands.items(), key=lambda x: x[1], reverse=True)[:3]),
+            "avg_price": sum(price_range) / len(price_range) if price_range else 0,
+            "recent_products": top_products,
             "total_interactions": len(user_history)
         }
     
-    def _create_recommendation_prompt(
+    def _create_enhanced_prompt(
         self,
         user_profile: Dict,
-        all_products: List[str],
-        exclude_products: List[str],
+        available_products: List[Dict],
         limit: int
     ) -> str:
-        """Create a prompt for Gemini to generate recommendations"""
-        available_products = [p for p in all_products if p not in exclude_products]
-        available_products = [p for p in available_products if p not in user_profile["top_products"]]
+        """Create enhanced prompt with real product data"""
         
-        prompt = f"""You are an AI recommendation system. Based on the user's interaction history, recommend {limit} products.
+        # Format product list
+        product_list = []
+        for p in available_products[:20]:  # Limit to avoid token limits
+            product_list.append({
+                "id": str(p.get("id")),
+                "title": p.get("title"),
+                "category": p.get("category"),
+                "brand": p.get("brand"),
+                "price": p.get("price"),
+                "rating": p.get("rating")
+            })
+        
+        prompt = f"""You are an intelligent e-commerce recommendation system. Analyze the user's shopping behavior and recommend the best products.
 
-User Profile:
-- Previously interacted products: {user_profile['top_products']}
-- Interaction types: {user_profile['interaction_summary']}
-- Total interactions: {user_profile['total_interactions']}
+User Shopping Profile:
+- Favorite Categories: {user_profile['top_categories']}
+- Preferred Brands: {user_profile['favorite_brands']}
+- Average Spending: ${user_profile['avg_price']:.2f}
+- Recent Products: {user_profile['recent_products']}
+- Total Interactions: {user_profile['total_interactions']}
 
-Available products to recommend from: {available_products[:50]}
+Available Products:
+{json.dumps(product_list, indent=2)}
 
-IMPORTANT: Respond ONLY with valid JSON in this exact format, no markdown, no explanation:
+Task: Recommend the top {limit} products that best match this user's preferences and shopping behavior.
+
+IMPORTANT: Respond with ONLY valid JSON in this exact format:
 {{
   "recommendations": [
-    {{"product_id": "product_name", "score": 0.95, "reason": "Brief reason"}},
-    {{"product_id": "product_name", "score": 0.87, "reason": "Brief reason"}}
+    {{
+      "product_id": "1",
+      "score": 0.95,
+      "reason": "Matches your interest in smartphones and preferred price range"
+    }}
   ]
 }}
 
-Rules:
-1. Recommend products similar to what the user interacted with
-2. Score between 0.0 and 1.0 (higher = more relevant)
-3. Provide brief, compelling reasons
+Guidelines:
+1. Consider category preferences, brands, and price range
+2. Score 0.0 to 1.0 based on relevance
+3. Provide specific, personalized reasons
 4. Return exactly {limit} recommendations
-5. Do not recommend products the user already interacted with
+5. Prioritize products similar to user's history
 """
         return prompt
     
-    def _parse_gemini_response(self, response_text: str, limit: int) -> List[ProductRecommendation]:
-        """Parse Gemini's JSON response into ProductRecommendation objects"""
+    async def _parse_and_enrich_response(
+        self,
+        response_text: str,
+        available_products: List[Dict]
+    ) -> List[ProductRecommendation]:
+        """Parse Gemini response and enrich with product data"""
         try:
-            # Clean response text
+            # Clean response
             response_text = response_text.strip()
             if response_text.startswith("```json"):
                 response_text = response_text[7:]
@@ -251,16 +275,29 @@ Rules:
                 response_text = response_text[:-3]
             response_text = response_text.strip()
             
-            # Parse JSON
             data = json.loads(response_text)
-            recommendations = []
             
-            for item in data.get("recommendations", [])[:limit]:
-                recommendations.append(ProductRecommendation(
-                    product_id=item["product_id"],
-                    score=min(max(float(item["score"]), 0.0), 1.0),
-                    reason=item.get("reason", "AI recommended")
-                ))
+            # Create product lookup
+            product_map = {str(p.get("id")): p for p in available_products}
+            
+            recommendations = []
+            for item in data.get("recommendations", []):
+                product_id = str(item["product_id"])
+                product = product_map.get(product_id)
+                
+                if product:
+                    recommendations.append(ProductRecommendation(
+                        product_id=product_id,
+                        title=product.get("title", "Unknown Product"),
+                        description=product.get("description", ""),
+                        price=product.get("price", 0),
+                        category=product.get("category", "unknown"),
+                        brand=product.get("brand"),
+                        rating=product.get("rating"),
+                        thumbnail=product.get("thumbnail"),
+                        score=min(max(float(item["score"]), 0.0), 1.0),
+                        reason=item.get("reason", "AI recommended")
+                    ))
             
             return recommendations
             
@@ -268,107 +305,38 @@ Rules:
             logger.error(f"Failed to parse Gemini response: {str(e)}")
             raise
     
-    async def _get_fallback_recommendations(
+    async def _create_recommendations_from_products(
         self,
-        user_id: str,
-        user_history: List[Dict],
-        limit: int,
-        exclude_products: List[str]
+        products: List[Dict],
+        default_reason: str
     ) -> List[ProductRecommendation]:
-        """
-        Fallback rule-based recommendations
-        Recommends products similar to user's most interacted items
-        """
-        # Calculate product scores from user history
-        product_scores = defaultdict(float)
-        for interaction in user_history:
-            product_id = interaction["product_id"]
-            product_scores[product_id] += interaction["weight"]
-        
-        # Get user's top products
-        user_top_products = set([p[0] for p in sorted(
-            product_scores.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )[:3]])
-        
-        # Get all products the user hasn't interacted with
-        all_interacted = set(p["product_id"] for p in user_history)
-        available_products = [
-            p for p in self.product_metadata.keys()
-            if p not in all_interacted and p not in exclude_products
-        ]
-        
-        # Score available products (simple similarity)
+        """Convert product list to recommendations"""
         recommendations = []
-        for product_id in available_products[:limit]:
-            score = 0.6 + (0.4 * len(user_top_products.intersection({product_id})))
-            recommendations.append(ProductRecommendation(
-                product_id=product_id,
-                score=score,
-                reason="Based on your interests"
-            ))
         
-        # Fill with popular if needed
-        if len(recommendations) < limit:
-            popular = await self._get_popular_recommendations(
-                limit - len(recommendations),
-                exclude_products + [r.product_id for r in recommendations]
-            )
-            recommendations.extend(popular)
-        
-        return recommendations[:limit]
-    
-    async def _get_popular_recommendations(
-        self,
-        limit: int,
-        exclude_products: List[str]
-    ) -> List[ProductRecommendation]:
-        """Get popular products as cold-start recommendations"""
-        product_popularity = defaultdict(int)
-        
-        # Calculate popularity from all interactions
-        for user_history in self.user_interactions.values():
-            for interaction in user_history:
-                product_id = interaction["product_id"]
-                product_popularity[product_id] += 1
-        
-        # Sort by popularity
-        popular_products = sorted(
-            product_popularity.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )
-        
-        recommendations = []
-        max_popularity = max(product_popularity.values()) if product_popularity else 1
-        
-        for product_id, count in popular_products:
-            if product_id in exclude_products:
-                continue
+        for i, product in enumerate(products):
+            score = 0.9 - (i * 0.1)  # Decreasing score
             
-            score = count / max_popularity
             recommendations.append(ProductRecommendation(
-                product_id=product_id,
-                score=score,
-                reason="Popular choice"
+                product_id=str(product.get("id")),
+                title=product.get("title", "Unknown Product"),
+                description=product.get("description", ""),
+                price=product.get("price", 0),
+                category=product.get("category", "unknown"),
+                brand=product.get("brand"),
+                rating=product.get("rating"),
+                thumbnail=product.get("thumbnail"),
+                score=max(score, 0.5),
+                reason=default_reason
             ))
-            
-            if len(recommendations) >= limit:
-                break
         
         return recommendations
     
     async def retrain_model(self):
-        """
-        Trigger for model updates
-        With Gemini, this is mostly for logging/metrics
-        """
+        """Trigger for model updates"""
         async with self.lock:
             logger.info(
-                f"Model refresh triggered. Using Gemini {settings.GEMINI_MODEL}. "
-                f"Total users: {len(self.user_interactions)}, "
-                f"Total products: {len(self.product_metadata)}"
+                f"Model refresh. Users: {len(self.user_interactions)}, "
+                f"Gemini: {self.client is not None}"
             )
     
     def get_stats(self) -> Dict:
@@ -380,7 +348,6 @@ Rules:
         return {
             "total_interactions": total_interactions,
             "unique_users": len(self.user_interactions),
-            "unique_products": len(self.product_metadata),
             "model_version": self.model_version,
             "gemini_model": settings.GEMINI_MODEL,
             "gemini_enabled": self.client is not None,
