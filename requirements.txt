@@ -1,0 +1,26 @@
+# FastAPI and Web Framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+pydantic-settings==2.6.1
+
+# Kafka (Event-driven architecture)
+aiokafka==0.12.0
+kafka-python==2.0.2
+
+# Google Gemini AI
+google-genai==0.3.0
+
+# Data Processing
+numpy==2.2.0
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.1
+
+# Logging and Monitoring
+python-json-logger==3.2.1
+
+# Utilities
+python-dotenv==1.0.1
