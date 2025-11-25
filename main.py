@@ -14,7 +14,8 @@ from app.models.schemas import (
     RecommendationResponse,
     HealthResponse
 )
-from app.services.recommendation_engine import RecommendationEngine
+from app.services.enhanced_recommendation_engine import EnhancedRecommendationEngine
+from app.services.product_service import product_service
 from app.services.kafka_producer import KafkaProducerService
 from app.services.kafka_consumer import KafkaConsumerService
 from app.config import settings
@@ -27,7 +28,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Initialize services
-recommendation_engine = RecommendationEngine()
+recommendation_engine = EnhancedRecommendationEngine()
 kafka_producer = KafkaProducerService()
 kafka_consumer = KafkaConsumerService(recommendation_engine)
 
@@ -172,6 +173,92 @@ async def trigger_model_retraining(background_tasks: BackgroundTasks):
     except Exception as e:
         logger.error(f"Error triggering retraining: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to trigger retraining")
+
+
+@app.get("/api/v1/products/search")
+async def search_products(query: str, limit: int = 10):
+    """
+    Search for real products by query
+    
+    Args:
+        query: Search term (e.g., "laptop", "phone")
+        limit: Number of results (max 30)
+    """
+    try:
+        if limit > 30:
+            limit = 30
+        
+        products = await product_service.search_products(query, limit)
+        
+        return {
+            "query": query,
+            "total": len(products),
+            "products": products
+        }
+    except Exception as e:
+        logger.error(f"Error searching products: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to search products")
+
+
+@app.get("/api/v1/products/{product_id}")
+async def get_product_details(product_id: str):
+    """
+    Get detailed product information
+    
+    Args:
+        product_id: Product ID
+    """
+    try:
+        product = await product_service.get_product_by_id(product_id)
+        
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        
+        return product
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching product: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch product")
+
+
+@app.get("/api/v1/products/category/{category}")
+async def get_products_by_category(category: str, limit: int = 10):
+    """
+    Get products by category
+    
+    Args:
+        category: Category name
+        limit: Number of results
+    """
+    try:
+        products = await product_service.get_products_by_category(category, limit)
+        
+        return {
+            "category": category,
+            "total": len(products),
+            "products": products
+        }
+    except Exception as e:
+        logger.error(f"Error fetching category: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch products")
+
+
+@app.get("/api/v1/categories")
+async def get_all_categories():
+    """
+    Get all available product categories
+    """
+    try:
+        categories = await product_service.get_all_categories()
+        
+        return {
+            "total": len(categories),
+            "categories": categories
+        }
+    except Exception as e:
+        logger.error(f"Error fetching categories: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch categories")
 
 
 if __name__ == "__main__":
