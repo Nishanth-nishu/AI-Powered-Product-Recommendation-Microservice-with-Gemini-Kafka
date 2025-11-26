@@ -31,32 +31,22 @@ class UserInteractionEvent(BaseModel):
         if not v or len(v.strip()) == 0:
             raise ValueError("ID cannot be empty")
         return v.strip()
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "user_id": "user_12345",
-                "product_id": "prod_67890",
-                "interaction_type": "view",
-                "metadata": {"source": "homepage", "device": "mobile"}
-            }
-        }
 
 
 class ProductRecommendation(BaseModel):
-    """Single product recommendation"""
+    """Single product recommendation with full details"""
     product_id: str = Field(..., description="Recommended product ID")
     score: float = Field(..., ge=0.0, le=1.0, description="Recommendation confidence score")
     reason: Optional[str] = Field(None, description="Reason for recommendation")
     
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "product_id": "prod_12345",
-                "score": 0.87,
-                "reason": "Based on your recent purchases"
-            }
-        }
+    # Enhanced fields for UI display
+    title: Optional[str] = Field("Unknown", description="Product title")
+    description: Optional[str] = Field(None, description="Product description")
+    price: Optional[float] = Field(0.0, description="Product price")
+    category: Optional[str] = Field(None, description="Product category")
+    brand: Optional[str] = Field(None, description="Product brand")
+    rating: Optional[float] = Field(None, description="Product rating")
+    thumbnail: Optional[str] = Field(None, description="Product thumbnail URL")
 
 
 class RecommendationRequest(BaseModel):
@@ -71,15 +61,6 @@ class RecommendationRequest(BaseModel):
         if not v or len(v.strip()) == 0:
             raise ValueError("User ID cannot be empty")
         return v.strip()
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "user_id": "user_12345",
-                "limit": 5,
-                "exclude_products": ["prod_111", "prod_222"]
-            }
-        }
 
 
 class RecommendationResponse(BaseModel):
@@ -88,19 +69,6 @@ class RecommendationResponse(BaseModel):
     recommendations: List[ProductRecommendation]
     model_version: str
     generated_at: datetime = Field(default_factory=datetime.utcnow)
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "user_id": "user_12345",
-                "recommendations": [
-                    {"product_id": "prod_111", "score": 0.92, "reason": "Popular in your category"},
-                    {"product_id": "prod_222", "score": 0.85, "reason": "Similar to your purchases"}
-                ],
-                "model_version": "v1.0.0",
-                "generated_at": "2024-01-15T10:30:00"
-            }
-        }
 
 
 class HealthResponse(BaseModel):
@@ -108,14 +76,5 @@ class HealthResponse(BaseModel):
     status: str = Field(..., description="Service status")
     service: str = Field(..., description="Service name")
     kafka_connected: bool = Field(..., description="Kafka connection status")
+    gemini_enabled: bool = Field(default=False, description="Is Gemini AI enabled")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "status": "healthy",
-                "service": "recommendation-service",
-                "kafka_connected": True,
-                "timestamp": "2024-01-15T10:30:00"
-            }
-        }

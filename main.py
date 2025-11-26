@@ -106,15 +106,24 @@ async def track_user_interaction(
     background_tasks: BackgroundTasks
 ):
     """
-    Track user interaction and publish to Kafka
-    Events are processed asynchronously
+    Track user interaction. 
+    If Kafka is available, publish there. Otherwise, process directly.
     """
     try:
-        # Publish event to Kafka in background
-        background_tasks.add_task(
-            kafka_producer.publish_interaction,
-            interaction
-        )
+        # Check if Kafka is connected
+        if kafka_producer.is_connected():
+            # Preferred: Publish to Kafka
+            background_tasks.add_task(
+                kafka_producer.publish_interaction,
+                interaction
+            )
+        else:
+            # Fallback: Direct processing (Important for your setup!)
+            # logger.warning("Kafka offline. Processing interaction directly.")
+            background_tasks.add_task(
+                recommendation_engine.process_interaction,
+                interaction
+            )
         
         logger.info(f"Interaction tracked: user={interaction.user_id}, product={interaction.product_id}")
         
@@ -126,7 +135,6 @@ async def track_user_interaction(
     except Exception as e:
         logger.error(f"Error tracking interaction: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to track interaction")
-
 
 @app.post("/api/v1/recommendations", response_model=RecommendationResponse)
 async def get_recommendations(request: RecommendationRequest):

@@ -20,7 +20,7 @@ def print_section(title):
 def print_product(product, score=None, reason=None):
     """Pretty print product"""
     print(f"\n {product.get('title', 'Unknown')}")
-    print(f"   ID: {product.get('id')}")
+    print(f"   ID: {product.get('product_id', 'N/A')}")
     print(f"   Category: {product.get('category', 'N/A')}")
     print(f"   Brand: {product.get('brand', 'N/A')}")
     print(f"   Price: ${product.get('price', 0)}")
