@@ -1,12 +1,15 @@
 """
 FastAPI application for Real-time Product Recommendation System
-Event-driven microservice with Kafka integration
+Event-driven microservice with Kafka integration and Web UI
 """
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 import logging
 from typing import List
+import os
 
 from app.models.schemas import (
     UserInteractionEvent,
@@ -14,7 +17,7 @@ from app.models.schemas import (
     RecommendationResponse,
     HealthResponse
 )
-from app.services.enhanced_recommendation_engine import EnhancedRecommendationEngine
+from app.services.enhanced_recommendation_engine import SOTARecommendationEngine
 from app.services.product_service import product_service
 from app.services.kafka_producer import KafkaProducerService
 from app.services.kafka_consumer import KafkaConsumerService
@@ -27,8 +30,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize services
-recommendation_engine = EnhancedRecommendationEngine()
+# Initialize services with SOTA engine
+recommendation_engine = SOTARecommendationEngine()
 kafka_producer = KafkaProducerService()
 kafka_consumer = KafkaConsumerService(recommendation_engine)
 
@@ -54,8 +57,8 @@ async def lifespan(app: FastAPI):
 # Initialize FastAPI app
 app = FastAPI(
     title="Product Recommendation Microservice",
-    description="Event-driven AI microservice for real-time product recommendations",
-    version="1.0.0",
+    description="Event-driven AI microservice for real-time product recommendations with Web UI",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -68,14 +71,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount static files
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.get("/", response_model=dict)
-async def root():
-    """Root endpoint"""
+
+@app.get("/", response_class=FileResponse)
+async def serve_ui():
+    """Serve the web UI"""
+    if os.path.exists("static/index.html"):
+        return FileResponse("static/index.html")
     return {
         "service": "Product Recommendation Microservice",
-        "version": "1.0.0",
-        "status": "running"
+        "version": "2.0.0",
+        "status": "running",
+        "ui": "Web UI not available. Create static/index.html to enable.",
+        "api_docs": "/docs"
     }
 
 
@@ -145,14 +156,19 @@ async def get_recommendations(request: RecommendationRequest):
 @app.get("/api/v1/stats", response_model=dict)
 async def get_service_stats():
     """Get service statistics"""
-    stats = recommendation_engine.get_stats()
-    return {
-        "total_interactions": stats["total_interactions"],
-        "unique_users": stats["unique_users"],
-        "unique_products": stats["unique_products"],
-        "model_version": stats["model_version"],
-        "last_training": stats["last_training"]
-    }
+    try:
+        stats = recommendation_engine.get_stats()
+        return {
+            "total_interactions": stats["total_interactions"],
+            "unique_users": stats["unique_users"],
+            "model_version": stats["model_version"],
+            "gemini_model": stats.get("gemini_model", "N/A"),
+            "gemini_enabled": stats.get("gemini_enabled", False),
+            "last_training": stats.get("last_training")
+        }
+    except Exception as e:
+        logger.error(f"Error getting stats: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get statistics")
 
 
 @app.post("/api/v1/retrain", status_code=202)

@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: Optional[str] = None  # Takes precedence if both are set
     GEMINI_MODEL: str = "gemini-2.0-flash-exp"
     
+    # Database configuration
+    DATABASE_URL: str = "sqlite:///./test.db"  # Default to SQLite for dev
+    REDIS_URL: Optional[str] = None  # e.g., "redis://localhost:6379/0"
+    
+    # JWT Authentication
+    JWT_SECRET_KEY: str = "your-secret-key-change-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
+    
     # ML Model configuration
     MODEL_VERSION: str = "v2.0.0-gemini"
     MIN_INTERACTIONS_FOR_RECOMMENDATIONS: int = 3

@@ -1,6 +1,42 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16
+    container_name: postgres-db
+    environment:
+      POSTGRES_USER: recommendation_user
+      POSTGRES_PASSWORD: recommendation_pass
+      POSTGRES_DB: recommendation_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - recommendation-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recommendation_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: redis-cache
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - recommendation-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # Zookeeper for Kafka
   zookeeper:
     image: confluentinc/cp-zookeeper:7.7.0
@@ -43,14 +79,32 @@ services:
     build: .
     container_name: recommendation-service
     depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       kafka:
         condition: service_healthy
     ports:
       - "8000:8000"
     environment:
+      # Kafka Configuration
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9093
       - KAFKA_INTERACTION_TOPIC=user-interactions
+      
+      # Database Configuration
+      - DATABASE_URL=postgresql://recommendation_user:recommendation_pass@postgres:5432/recommendation_db
+      - REDIS_URL=redis://redis:6379/0
+      
+      # Gemini API (set your key here or use .env)
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      
+      # JWT Secret (change in production!)
+      - JWT_SECRET_KEY=your-secret-key-change-in-production-12345
+      
       - LOG_LEVEL=INFO
+    volumes:
+      - ./static:/app/static:ro
     networks:
       - recommendation-network
     healthcheck:
@@ -63,3 +117,7 @@ services:
 networks:
   recommendation-network:
     driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
